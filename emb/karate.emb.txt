@@ -1,0 +1,6 @@
+{
+  "seed": 6278,
+  "input": "../graph/karate.edgelist",
+  "walk-length": 80,
+  "num-walks": 10
+}

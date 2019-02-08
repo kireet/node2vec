@@ -16,12 +16,13 @@ from pathlib import Path
 
 import numpy as np
 import networkx as nx
+import os
 from gensim.models import Word2Vec
 
 import node2vec
 
 
-def parse_args():
+def arg_parser():
     '''
     Parses the node2vec arguments.
     '''
@@ -69,10 +70,10 @@ def parse_args():
     parser.add_argument('--undirected', dest='undirected', action='store_false')
     parser.set_defaults(directed=False)
 
-    return parser.parse_args()
+    return parser
 
 
-def read_graph():
+def read_graph(args):
     '''
     Reads the input network in networkx.
     '''
@@ -89,7 +90,7 @@ def read_graph():
     return G
 
 
-def learn_embeddings(walks):
+def learn_embeddings(walks, args):
     '''
     Learn embeddings by optimizing the Skipgram objective using SGD.
     '''
@@ -97,6 +98,9 @@ def learn_embeddings(walks):
     model = Word2Vec(walks, size=args.dimensions, window=args.window_size, min_count=0, sg=1, workers=args.workers, iter=args.iter)
     path = Path(args.output)
     path.parent.mkdir(exist_ok=True, parents=True)
+
+    # old = Word2Vec.load(args.output)
+    # print('all close:', np.allclose(old.wv.vectors, model.wv.vectors))
     model.save(args.output)
 
     path = Path(args.output + '.txt')
@@ -118,17 +122,19 @@ def main(args):
     Pipeline for representational learning for all nodes in a graph.
     '''
     if args.seed is not None:
+        if not os.environ.get('PYTHONHASHSEED') != args.seed:
+            raise ValueError('environment variable PYTHONHASHSEED must also be set to ' + str(args.seed) + ' for reproducible results')
         random.seed(args.seed)
         np.random.seed(args.seed)
         args.workers = 1
         print('using seed ', args.seed)
-    nx_G = read_graph()
+    nx_G = read_graph(args)
     G = node2vec.Graph(nx_G, args.directed, args.p, args.q)
     G.preprocess_transition_probs()
     walks = G.simulate_walks(args.num_walks, args.walk_length)
 
-    return learn_embeddings(walks)
+    return learn_embeddings(walks, args)
 
 if __name__ == "__main__":
-    args = parse_args()
-    model = main(args)
+    _args = arg_parser().parse_args()
+    _model = main(_args)
