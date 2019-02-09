@@ -1,21 +1,31 @@
-import numpy as np
-import networkx as nx
 import random
+
+import numpy as np
+from tqdm import tqdm
 
 
 class Graph():
     def __init__(self, nx_G, is_directed, p, q):
+        """
+        :param nx_G: the networkx graph
+        :param is_directed: is the graph directed
+        :param p: the return parameter, lower values encourge backtracking
+        :param q: the in-out parameter, lower values encourage outward exploration
+        """
         self.G = nx_G
         self.is_directed = is_directed
         self.p = p
         self.q = q
-        self.alias_nodes = None
-        self.alias_edges = None
+        self.alias_nodes = None  #node2aliasdata dictionary
+        self.alias_edges = None  #edge2aliasdata dictionary
 
     def node2vec_walk(self, walk_length, start_node):
-        '''
+        """
         Simulate a random walk starting from start node.
-        '''
+        :param walk_length: the walk length
+        :param start_node: the start node
+        :return: the walk
+        """
         G = self.G
         alias_nodes = self.alias_nodes
         alias_edges = self.alias_edges
@@ -27,11 +37,12 @@ class Graph():
             cur_nbrs = sorted(G.neighbors(cur))
             if len(cur_nbrs) > 0:
                 if len(walk) == 1:
+                    # just starting the walk, take a random step from the node
                     walk.append(cur_nbrs[alias_draw(alias_nodes[cur][0], alias_nodes[cur][1])])
                 else:
+                    # otherwise incorporate the search bias into the walk
                     prev = walk[-2]
-                    next = cur_nbrs[alias_draw(alias_edges[(prev, cur)][0],
-                        alias_edges[(prev, cur)][1])]
+                    next = cur_nbrs[alias_draw(alias_edges[(prev, cur)][0], alias_edges[(prev, cur)][1])]
                     walk.append(next)
             else:
                 break
@@ -39,25 +50,33 @@ class Graph():
         return walk
 
     def simulate_walks(self, num_walks, walk_length):
-        '''
+        """
         Repeatedly simulate random walks from each node.
-        '''
+        :param num_walks: number of walks per node
+        :param walk_length: the length of each walk
+        :return: the walks
+        """
         G = self.G
         walks = []
         nodes = list(G.nodes())
         print('Walk iteration:')
-        for walk_iter in range(num_walks):
+        for walk_iter in tqdm(range(num_walks)):
             print(str(walk_iter+1), '/', str(num_walks))
-            random.shuffle(nodes)
+            random.shuffle(nodes)  # i assume this is to randomize the dataset order?
             for node in nodes:
                 walks.append(self.node2vec_walk(walk_length=walk_length, start_node=node))
 
         return walks
 
     def get_alias_edge(self, src, dst):
-        '''
-        Get the alias edge setup lists for a given edge.
-        '''
+        """
+        Get the alias edge setup lists for a given edge. This contains the random walk probabilities
+        if the walk just traversed the edge from src to dst.
+        :param src: the source node
+        :param dst: the dest node
+        :return: the normalized walk probabilities
+        """
+
         G = self.G
         p = self.p
         q = self.q
@@ -65,13 +84,13 @@ class Graph():
         unnormalized_probs = []
         for dst_nbr in sorted(G.neighbors(dst)):
             if dst_nbr == src:
-                unnormalized_probs.append(G[dst][dst_nbr]['weight']/p)
+                unnormalized_probs.append(G[dst][dst_nbr]['weight']/p)  # return probability
             elif G.has_edge(dst_nbr, src):
-                unnormalized_probs.append(G[dst][dst_nbr]['weight'])
+                unnormalized_probs.append(G[dst][dst_nbr]['weight'])    # distance of 1
             else:
-                unnormalized_probs.append(G[dst][dst_nbr]['weight']/q)
+                unnormalized_probs.append(G[dst][dst_nbr]['weight']/q)  # distance of > 1
         norm_const = sum(unnormalized_probs)
-        normalized_probs =  [float(u_prob)/norm_const for u_prob in unnormalized_probs]
+        normalized_probs = [float(u_prob)/norm_const for u_prob in unnormalized_probs]
 
         return alias_setup(normalized_probs)
 
@@ -86,11 +105,10 @@ class Graph():
         for node in G.nodes():
             unnormalized_probs = [G[node][nbr]['weight'] for nbr in sorted(G.neighbors(node))]
             norm_const = sum(unnormalized_probs)
-            normalized_probs =  [float(u_prob)/norm_const for u_prob in unnormalized_probs]
+            normalized_probs = [float(u_prob)/norm_const for u_prob in unnormalized_probs]
             alias_nodes[node] = alias_setup(normalized_probs)
 
         alias_edges = {}
-        triads = {}
 
         if is_directed:
             for edge in G.edges():
@@ -107,19 +125,26 @@ class Graph():
 
 
 def alias_setup(probs):
-    '''
+    """
     Compute utility lists for non-uniform sampling from discrete distributions.
     Refer to https://hips.seas.harvard.edu/blog/2013/03/03/the-alias-method-efficient-sampling-with-many-discrete-outcomes/
     for details
-    '''
+
+    :param probs: the probabilities (length N)
+    :return: q an array of length N where the value of q[i] is the probability of choice i given i was drawn uniformly. the
+             remaining probability is allocated to the choice stored in J[i]
+    """
+
     K = len(probs)
     q = np.zeros(K)
     J = np.zeros(K, dtype=np.int)
 
+    # Sort the data into the outcomes with probabilities
+    # that are larger and smaller than 1/K.
     smaller = []
     larger = []
     for kk, prob in enumerate(probs):
-        q[kk] = K*prob
+        q[kk] = K*prob  # convert the probability to a condition prob Pr(kk | kk was drawn uniformly)
         if q[kk] < 1.0:
             smaller.append(kk)
         else:
@@ -138,13 +163,20 @@ def alias_setup(probs):
 
     return J, q
 
+
 def alias_draw(J, q):
-    '''
-    Draw sample from a non-uniform discrete distribution using alias sampling.
-    '''
+    """
+    alias sample a discrete probability distribution.
+    :param J: see alias_setup
+    :param q: see alias_setup
+    :return: the choice
+    """
     K = len(J)
 
-    kk = int(np.floor(np.random.rand()*K))
+    # Draw from the overall uniform mixture.
+    kk = int(np.floor(np.random.rand()*K))  # basically np.random.choice
+
+    # now that we've chosen a bucket, check to see if we should pick the original item or the "remainder" item
     if np.random.rand() < q[kk]:
         return kk
     else:
