@@ -1,74 +1,45 @@
 import random
+from abc import ABC, abstractmethod
+from typing import Tuple
 
 import numpy as np
+import networkx as nx
 from tqdm import tqdm
 
 
-class Graph():
-    def __init__(self, nx_G, is_directed, p, q):
+class SamplerABC(ABC):
+
+    @abstractmethod
+    def sample(self, cur, prev=None) -> int:
+        pass
+
+
+class InMemorySampler(SamplerABC):
+    def __init__(self, G:nx.Graph, p:float, q:float, is_directed:bool):
         """
-        :param nx_G: the networkx graph
+        :param G: the networkx graph
         :param is_directed: is the graph directed
         :param p: the return parameter, lower values encourge backtracking
         :param q: the in-out parameter, lower values encourage outward exploration
         """
-        self.G = nx_G
-        self.is_directed = is_directed
+
+        self.G = G
         self.p = p
         self.q = q
         self.alias_nodes = None  #node2aliasdata dictionary
         self.alias_edges = None  #edge2aliasdata dictionary
+        self.is_directed = is_directed
+        self.preprocess_transition_probs()
 
-    def node2vec_walk(self, walk_length, start_node):
-        """
-        Simulate a random walk starting from start node.
-        :param walk_length: the walk length
-        :param start_node: the start node
-        :return: the walk
-        """
-        G = self.G
-        alias_nodes = self.alias_nodes
-        alias_edges = self.alias_edges
+    def sample(self, cur, prev=None) -> int:
+        if prev is None:
+            J, q = self.alias_nodes[cur]
+        else:
+            J, q = self.alias_edges[(prev, cur)]
 
-        walk = [start_node]
+        return alias_draw(J, q)
 
-        while len(walk) < walk_length:
-            cur = walk[-1]
-            cur_nbrs = sorted(G.neighbors(cur))
-            if len(cur_nbrs) > 0:
-                if len(walk) == 1:
-                    # just starting the walk, take a random step from the node
-                    walk.append(cur_nbrs[alias_draw(alias_nodes[cur][0], alias_nodes[cur][1])])
-                else:
-                    # otherwise incorporate the search bias into the walk
-                    prev = walk[-2]
-                    next = cur_nbrs[alias_draw(alias_edges[(prev, cur)][0], alias_edges[(prev, cur)][1])]
-                    walk.append(next)
-            else:
-                break
-
-        return walk
-
-    def simulate_walks(self, num_walks, walk_length):
-        """
-        Repeatedly simulate random walks from each node.
-        :param num_walks: number of walks per node
-        :param walk_length: the length of each walk
-        :return: the walks
-        """
-        G = self.G
-        walks = []
-        nodes = list(G.nodes())
-        print('Walk iteration:')
-        for walk_iter in tqdm(range(num_walks)):
-            print(str(walk_iter+1), '/', str(num_walks))
-            random.shuffle(nodes)  # i assume this is to randomize the dataset order?
-            for node in nodes:
-                walks.append(self.node2vec_walk(walk_length=walk_length, start_node=node))
-
-        return walks
-
-    def get_alias_edge(self, src, dst):
+    def get_alias_edge(self, src, dst) -> Tuple[np.ndarray, np.ndarray]:
         """
         Get the alias edge setup lists for a given edge. This contains the random walk probabilities
         if the walk just traversed the edge from src to dst.
@@ -76,25 +47,25 @@ class Graph():
         :param dst: the dest node
         :return: the normalized walk probabilities
         """
-
         G = self.G
-        p = self.p
-        q = self.q
 
         unnormalized_probs = []
         for dst_nbr in sorted(G.neighbors(dst)):
             if dst_nbr == src:
-                unnormalized_probs.append(G[dst][dst_nbr]['weight']/p)  # return probability
+                proba = G[dst][dst_nbr]['weight'] / self.p  # return probability
             elif G.has_edge(dst_nbr, src):
-                unnormalized_probs.append(G[dst][dst_nbr]['weight'])    # distance of 1
+                proba = G[dst][dst_nbr]['weight']           # distance of 1
             else:
-                unnormalized_probs.append(G[dst][dst_nbr]['weight']/q)  # distance of > 1
+                proba = G[dst][dst_nbr]['weight'] / self.q  # distance of > 1
+
+            unnormalized_probs.append(proba)
+
         norm_const = sum(unnormalized_probs)
         normalized_probs = [float(u_prob)/norm_const for u_prob in unnormalized_probs]
 
         return alias_setup(normalized_probs)
 
-    def preprocess_transition_probs(self):
+    def preprocess_transition_probs(self) -> None:
         '''
         Preprocessing of transition probabilities for guiding the random walks.
         '''
@@ -121,7 +92,64 @@ class Graph():
         self.alias_nodes = alias_nodes
         self.alias_edges = alias_edges
 
-        return
+
+class GraphWalker:
+    # Lot of sorting going on. This is b/c the alias sampling arrays work off positions, but networkx graphs work off
+    # unordered collections, even though nx.OrderedDiGraph uses OrderedDict, it still doesn't support getting the nth key.
+    # so to avoid sorting, we'd have to also store a position to node id array with the alias sampling data. TBD if it's worthwhile.
+
+    def __init__(self, G:nx.Graph, sampler:SamplerABC):
+        """
+        :param G: the networkx graph
+        :param sampler: the walk sampler
+        """
+        self.G = G
+        self.sampler = sampler
+
+    def node2vec_walk(self, walk_length, start_node):
+        """
+        Simulate a random walk starting from start node.
+        :param walk_length: the walk length
+        :param start_node: the start node
+        :return: the walk
+        """
+        G = self.G
+
+        walk = [start_node]
+
+        while len(walk) < walk_length:
+            cur = walk[-1]
+            cur_nbrs = sorted(G.neighbors(cur))
+            if len(cur_nbrs) > 0:
+                if len(walk) == 1:
+                    # just starting the walk, take a random step from the node
+                    walk.append(cur_nbrs[self.sampler.sample(cur)])
+                else:
+                    walk.append(cur_nbrs[self.sampler.sample(cur=cur, prev=walk[-2])])
+            else:
+                break
+
+        return walk
+
+    def simulate_walks(self, num_walks, walk_length):
+        """
+        Repeatedly simulate random walks from each node.
+        :param num_walks: number of walks per node
+        :param walk_length: the length of each walk
+        :return: the walks
+        """
+        G = self.G
+        walks = []
+        nodes = list(G.nodes())
+        print('Walk iteration:')
+        for walk_iter in tqdm(range(num_walks)):
+            print(str(walk_iter+1), '/', str(num_walks))
+            random.shuffle(nodes)  # i assume this is to randomize the dataset order?
+            for node in nodes:
+                walks.append(self.node2vec_walk(walk_length=walk_length, start_node=node))
+
+        return walks
+
 
 
 def alias_setup(probs):

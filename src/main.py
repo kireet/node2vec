@@ -20,6 +20,7 @@ import os
 from gensim.models import Word2Vec
 
 import node2vec
+from node2vec import InMemorySampler
 
 
 def arg_parser():
@@ -57,7 +58,6 @@ def arg_parser():
 
     parser.add_argument('--q', type=float, default=1,
                         help='Inout hyperparameter. Default is 1.')
-
     parser.add_argument('--seed', '-s', type=int,
                         help='set random seed')
     parser.add_argument('--weighted', dest='weighted', action='store_true',
@@ -128,10 +128,11 @@ def main(args):
         np.random.seed(args.seed)
         args.workers = 1
         print('using seed ', args.seed)
-    nx_G = read_graph(args)
-    G = node2vec.Graph(nx_G, args.directed, args.p, args.q)
-    G.preprocess_transition_probs()
-    walks = G.simulate_walks(args.num_walks, args.walk_length)
+    G = read_graph(args)
+
+    sampler = InMemorySampler(G, args.p, args.q, args.directed)
+    W = node2vec.GraphWalker(G, sampler)
+    walks = W.simulate_walks(args.num_walks, args.walk_length)
 
     return learn_embeddings(walks, args)
 
