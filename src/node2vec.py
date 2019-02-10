@@ -164,15 +164,16 @@ def _edge_worker(p, q, edge):
 
 
 class ConcurrentInMemorySampler(InMemorySampler):
-    def __init__(self, G:nx.Graph, p:float, q:float, is_directed:bool, workers):
+    def __init__(self, G:nx.Graph, p:float, q:float, is_directed:bool, workers:int):
         """
         :param G: the networkx graph
         :param p: the return parameter, lower values encourge backtracking
         :param q: the in-out parameter, lower values encourage outward exploration
         :param is_directed: is the graph directed
+        :param workers: number of sampler workers
         """
-        super().__init__(G, p, q, is_directed)
         self.workers = workers
+        super().__init__(G, p, q, is_directed)
 
     def preprocess_transition_probs(self) -> None:
         '''
