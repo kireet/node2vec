@@ -164,7 +164,7 @@ def _edge_worker(p, q, edge):
 
 
 class ConcurrentInMemorySampler(InMemorySampler):
-    def __init__(self, G:nx.Graph, p:float, q:float, is_directed:bool):
+    def __init__(self, G:nx.Graph, p:float, q:float, is_directed:bool, workers):
         """
         :param G: the networkx graph
         :param p: the return parameter, lower values encourge backtracking
@@ -172,6 +172,7 @@ class ConcurrentInMemorySampler(InMemorySampler):
         :param is_directed: is the graph directed
         """
         super().__init__(G, p, q, is_directed)
+        self.workers = workers
 
     def preprocess_transition_probs(self) -> None:
         '''
@@ -193,14 +194,14 @@ class ConcurrentInMemorySampler(InMemorySampler):
         # num_sent, num_received = 0, 0
         _GRAPH = G
 
-        with mp.Pool(mp.cpu_count()) as pool:
+        with mp.Pool(self.workers) as pool:
             for node, J_q in tqdm_pc(pool.imap_unordered(_node_worker, G.nodes(), chunksize=1000), total=G.number_of_nodes(), desc='conc. in mem nodes'):
                 alias_nodes[node] = J_q
 
         print('nodes computed')
         alias_edges = {}
 
-        with mp.Pool(mp.cpu_count()) as pool:
+        with mp.Pool(self.workers) as pool:
             num_edges = G.number_of_edges()
             edge_worker = functools.partial(_edge_worker, p, q)
             for edge, J_q in tqdm_pc(pool.imap_unordered(edge_worker, G.edges(), chunksize=1000), total=num_edges, desc='conc. in mem edges'):
@@ -208,7 +209,7 @@ class ConcurrentInMemorySampler(InMemorySampler):
 
             if not is_directed:
                 rev_edges = ((e[1], e[0]) for e in G.edges())
-                for edge, J_q in tqdm_pc(pool.imap_unordered(edge_worker, rev_edges, chunksize=1000), total=num_edges, desc='conc. in mem edges'):
+                for edge, J_q in tqdm_pc(pool.imap_unordered(edge_worker, rev_edges, chunksize=1000), total=num_edges, desc='conc. in mem back edges'):
                     alias_edges[edge] = J_q
 
         self.alias_nodes = alias_nodes

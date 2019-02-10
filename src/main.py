@@ -163,7 +163,7 @@ def main(args):
     print('graph constructed.')
 
     if args.concurrent_sampler:
-        sampler = ConcurrentInMemorySampler(G, args.p, args.q, args.directed)
+        sampler = ConcurrentInMemorySampler(G, args.p, args.q, args.directed, args.workers)
     elif args.sample_file:
         sampler = SqliteSampler(G, args.p, args.q, args.directed, Path(args.sample_file))
     else:
