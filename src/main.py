@@ -10,19 +10,17 @@ Knowledge Discovery and Data Mining (KDD), 2016
 '''
 
 import argparse
-import bz2
 import gzip
 import json
+import os
 import random
+from collections import Counter
 from pathlib import Path
 
-from gensim.models.word2vec import LineSentence
-from tqdm import tqdm
-
-import numpy as np
 import networkx as nx
-import os
+import numpy as np
 from gensim.models import Word2Vec
+from gensim.models.word2vec import LineSentence
 from networkx.utils import open_file
 
 from node2vec import InMemorySampler, SqliteSampler, GraphWalker, tqdm_pc, ConcurrentInMemorySampler
@@ -45,6 +43,9 @@ def arg_parser():
 
     parser.add_argument('--walk-length', type=int, default=80,
                         help='Length of walk per source. Default is 80.')
+
+    parser.add_argument('--max-edges', type=int,
+                        help='max edges per node. Default is unlimited.')
 
     parser.add_argument('--num-walks', type=int, default=10,
                         help='Number of walks per source. Default is 10.')
@@ -113,6 +114,20 @@ def read_graph(args):
     return parse_graph(args.input, args)
 
 
+def prune_graph(G:nx.Graph, max_edges:int):
+
+    num_edges = G.number_of_edges()
+    for node in tqdm_pc(G.nodes(), desc='prune graph', total=len(G)):
+        neighbors = G.neighbors(node)
+
+        if len(neighbors) > max_edges:
+            weight_and_nbor = [(G[node][nbor]['weight'], nbor) for nbor in neighbors]
+            weight_and_nbor.sort(reverse=True)
+            to_prune = [(node, nbor) for _, nbor in weight_and_nbor[max_edges:]]
+            G.remove_edges_from(to_prune)
+
+    print(f'edges {num_edges} -> {G.number_of_edges()} ({100*G.number_of_edges()/num_edges:2f}% retained)')
+
 def learn_embeddings(walks, args):
     '''
     Learn embeddings by optimizing the Skipgram objective using SGD.
@@ -161,6 +176,10 @@ def main(args):
     G = read_graph(args)
 
     print('graph constructed.')
+
+    if args.max_edges:
+        prune_graph(G, args.max_edges)
+
 
     if args.concurrent_sampler:
         sampler = ConcurrentInMemorySampler(G, args.p, args.q, args.directed, args.workers)

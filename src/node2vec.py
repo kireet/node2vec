@@ -3,12 +3,12 @@ import io
 import os
 import random
 import sqlite3
-import queue
+import time
 
 import multiprocessing as mp
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Tuple
+from typing import Tuple, Callable, Any
 
 import networkx as nx
 import numpy as np
@@ -47,6 +47,18 @@ class SamplerABC(ABC):
     def sample(self, cur, prev=None) -> int:
         pass
 
+def time_it(f:Callable, *args) -> Tuple[Any, float]:
+    """
+    time the execution and optionally log a message.
+    :param f: the function
+    :return: a tuple of the function return value and the elapsed time
+    """
+    t0 = time.time()
+    rv = f(*args)
+    t = time.time()
+
+    return rv, t - t0
+
 
 def preprocess_alias_edge(G, p, q, src, dst) -> Tuple[np.ndarray, np.ndarray]:
     """
@@ -61,7 +73,10 @@ def preprocess_alias_edge(G, p, q, src, dst) -> Tuple[np.ndarray, np.ndarray]:
     """
 
     unnormalized_probs = []
-    for dst_nbr in sorted(G.neighbors(dst)):
+
+    times = {}
+    neighbors = sorted(G.neighbors(dst))
+    for dst_nbr in neighbors:
         if dst_nbr == src:
             proba = G[dst][dst_nbr]['weight'] / p  # return probability
         elif G.has_edge(dst_nbr, src):
@@ -72,6 +87,7 @@ def preprocess_alias_edge(G, p, q, src, dst) -> Tuple[np.ndarray, np.ndarray]:
         unnormalized_probs.append(proba)
 
     norm_const = sum(unnormalized_probs)
+
     normalized_probs = [float(u_prob)/norm_const for u_prob in unnormalized_probs]
 
     return alias_setup(normalized_probs)
@@ -129,6 +145,7 @@ class InMemorySampler(SamplerABC):
                 alias_edges[edge] = preprocess_alias_edge(G, p, q, edge[0], edge[1])
         else:
             for edge in G.edges():
+
                 alias_edges[edge] = preprocess_alias_edge(G, p, q, edge[0], edge[1])
                 alias_edges[(edge[1], edge[0])] = preprocess_alias_edge(G, p, q, edge[1], edge[0])
 
@@ -196,7 +213,7 @@ class ConcurrentInMemorySampler(InMemorySampler):
         _GRAPH = G
 
         with mp.Pool(self.workers) as pool:
-            for node, J_q in tqdm_pc(pool.imap_unordered(_node_worker, G.nodes(), chunksize=1000), total=G.number_of_nodes(), desc='conc. in mem nodes'):
+            for node, J_q in tqdm_pc(pool.imap_unordered(_node_worker, G.nodes(), chunksize=1000), total=len(G), desc='conc. in mem nodes'):
                 alias_nodes[node] = J_q
 
         print('nodes computed')
@@ -212,6 +229,16 @@ class ConcurrentInMemorySampler(InMemorySampler):
                 rev_edges = ((e[1], e[0]) for e in G.edges())
                 for edge, J_q in tqdm_pc(pool.imap_unordered(edge_worker, rev_edges, chunksize=1000), total=num_edges, desc='conc. in mem back edges'):
                     alias_edges[edge] = J_q
+
+        # num_edges = G.number_of_edges()
+        # edge_worker = functools.partial(_edge_worker, p, q)
+        # for edge in tqdm_pc(G.edges(), desc='in proc edges', total=num_edges):
+        #     alias_edges[edge] = edge_worker(edge)[1]
+        #
+        # if not is_directed:
+        #     rev_edges = ((e[1], e[0]) for e in G.edges())
+        #     for edge in tqdm_pc(rev_edges, desc='in proc back edges', total=num_edges):
+        #         alias_edges[edge] = edge_worker(edge)[1]
 
         self.alias_nodes = alias_nodes
         self.alias_edges = alias_edges
@@ -314,7 +341,7 @@ class SqliteSampler(SamplerABC):
         Preprocessing of transition probabilities for guiding the random walks.
         '''
 
-        for node in tqdm_pc(self.G.nodes(), desc='sqlite nodes', total=self.G.number_of_nodes()):
+        for node in tqdm_pc(self.G.nodes(), desc='sqlite nodes', total=len(self.G)):
             J, q = preprocess_alias_node(self.G, node)
             self.conn.execute("insert into alias_nodes (id, J, q) values (?,?,?)", (node, J, q))
 
@@ -398,7 +425,7 @@ class GraphWalker:
             print(str(walk_iter+1), '/', str(num_walks))
             random.shuffle(shuffled_nodes)  # i assume this is to randomize the dataset order?
             iterable = _inline_processor(shuffled_nodes) if cpu_count == 1 else _mp_processor(shuffled_nodes)
-            for walk in tqdm_pc(iterable, desc=f'walk {walk_iter}', total=self.G.number_of_nodes()):
+            for walk in tqdm_pc(iterable, desc=f'walk {walk_iter}', total=len(self.G)):
                 collector(walk)
 
 
