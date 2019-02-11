@@ -118,10 +118,9 @@ def prune_graph(G:nx.Graph, max_edges:int):
 
     num_edges = G.number_of_edges()
     for node in tqdm_pc(G.nodes(), desc='prune graph', total=len(G)):
-        neighbors = G.neighbors(node)
 
-        if len(neighbors) > max_edges:
-            weight_and_nbor = [(G[node][nbor]['weight'], nbor) for nbor in neighbors]
+        weight_and_nbor = [(G[node][nbor]['weight'], nbor) for nbor in G.neighbors(node)]
+        if len(weight_and_nbor) > max_edges:
             weight_and_nbor.sort(reverse=True)
             to_prune = [(node, nbor) for _, nbor in weight_and_nbor[max_edges:]]
             G.remove_edges_from(to_prune)
