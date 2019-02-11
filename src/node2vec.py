@@ -227,7 +227,7 @@ class ConcurrentInMemorySampler(InMemorySampler):
 
             if not is_directed:
                 rev_edges = ((e[1], e[0]) for e in G.edges())
-                for edge, J_q in tqdm_pc(pool.imap_unordered(edge_worker, rev_edges, chunksize=1000), total=num_edges, desc='conc. in mem back edges'):
+                for edge, J_q in tqdm_pc(pool.imap_unordered(edge_worker, rev_edges, chunksize=1000), smoothing=0.7, total=num_edges, desc='conc. in mem back edges'):
                     alias_edges[edge] = J_q
 
         # num_edges = G.number_of_edges()
